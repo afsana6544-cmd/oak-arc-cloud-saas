@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Oak & Arc — Place Order</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;background:#f6f7fb}
+    header{padding:20px;background:#111;color:#fff}
+    main{max-width:820px;margin:24px auto;padding:16px}
+    .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,.06)}
+    label{display:block;font-weight:600;margin-top:12px}
+    input,textarea,select{width:100%;padding:10px;border-radius:10px;border:1px solid #d7dbe7;margin-top:6px}
+    button{margin-top:14px;padding:10px 14px;border:0;border-radius:10px;background:#111;color:#fff;cursor:pointer}
+    .msg{margin-top:12px;padding:10px;border-radius:10px}
+    .ok{background:#e7fbef;border:1px solid #8be2ad}
+    .err{background:#ffecec;border:1px solid #ff9a9a}
+    small{color:#5a6072}
+  </style>
+</head>
+<body>
+  <header>
+    <h1 style="margin:0">Oak & Arc Furniture</h1>
+    <p style="margin:6px 0 0;opacity:.85">Order Request (Public Module)</p>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2 style="margin-top:0">Submit your order</h2>
+      <p style="margin-top:6px;color:#5a6072">
+        We’ll confirm details and update status in real time.
+      </p>
+
+      <form id="orderForm">
+        <label>Full name</label>
+        <input id="name" required maxlength="80" />
+
+        <label>Email</label>
+        <input id="email" type="email" required maxlength="120" />
+
+        <label>What are you ordering?</label>
+        <textarea id="items" required rows="4" maxlength="800"
+          placeholder="e.g. 1x Oak dining table (180cm), 4x chairs, delivery to Dublin 8"></textarea>
+
+        <label>Estimated total (€) (optional)</label>
+        <input id="estimate" type="number" min="0" step="0.01" placeholder="e.g. 799.00" />
+
+        <button type="submit">Send order request</button>
+
+        <div id="msg"></div>
+        <p><small>Staff will process: New → Preparing → Ready → Collected</small></p>
+      </form>
+    </div>
+  </main>
+
+  <script type="module">
+    // 1) Firebase SDKs (modular)
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    // 2) TODO: paste your Firebase config here
+    const firebaseConfig = {
+      // apiKey: "...",
+      // authDomain: "...",
+      // projectId: "...",
+      // ...
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const $ = (id) => document.getElementById(id);
+    const msg = (text, type) => {
+      const el = $("msg");
+      el.className = "msg " + (type === "ok" ? "ok" : "err");
+      el.textContent = text;
+    };
+
+    $("orderForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("msg").className = "";
+      $("msg").textContent = "";
+
+      const name = $("name").value.trim();
+      const email = $("email").value.trim();
+      const items = $("items").value.trim();
+      const estimateRaw = $("estimate").value.trim();
+
+      // Basic validation
+      if (name.length < 2) return msg("Please enter your full name.", "err");
+      if (!email.includes("@")) return msg("Please enter a valid email.", "err");
+      if (items.length < 10) return msg("Please add a bit more detail about your order.", "err");
+
+      const estimate = estimateRaw ? Number(estimateRaw) : null;
+      if (estimateRaw && (Number.isNaN(estimate) || estimate < 0)) {
+        return msg("Estimated total must be a positive number.", "err");
+      }
+
+      try {
+        await addDoc(collection(db, "orders"), {
+          customerName: name,
+          customerEmail: email,
+          items,
+          estimate,
+          status: "New",
+          internalNotes: "",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+
+        msg("Order request submitted! Staff will see it instantly.", "ok");
+        e.target.reset();
+      } catch (err) {
+        console.error(err);
+        msg("Error sending order. Check your Firebase config / rules.", "err");
+      }
+    });
+  </script>
+</body>
+</html>
