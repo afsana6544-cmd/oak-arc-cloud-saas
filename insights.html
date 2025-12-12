@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Oak & Arc — Insights</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;background:#f6f7fb}
+    header{padding:20px;background:#111;color:#fff;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+    main{max-width:1000px;margin:24px auto;padding:16px}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,.06)}
+    .kpi{font-size:34px;font-weight:800;margin:0}
+    .muted{color:#5a6072;margin:6px 0 0}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef1f6;font-size:12px;color:#111}
+    button{padding:10px 14px;border:0;border-radius:10px;background:#111;color:#fff;cursor:pointer}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    #loginBox{display:none}
+    #msg{margin-top:10px;padding:10px;border-radius:10px;background:#ffecec;border:1px solid #ff9a9a;display:none}
+    @media (max-width: 900px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1 style="margin:0">Operational Insights</h1>
+      <p style="margin:6px 0 0;opacity:.85">Real-time view derived from Firestore</p>
+    </div>
+    <div class="row">
+      <span id="authState" class="pill">Not signed in</span>
+      <button id="signOutBtn" style="display:none">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="loginBox" class="card">
+      <h2 style="margin-top:0">Staff sign-in</h2>
+      <p class="muted">Insights are staff-only.</p>
+      <div class="row">
+        <input id="email" type="email" placeholder="Email" style="padding:10px;border-radius:10px;border:1px solid #d7dbe7" />
+        <input id="password" type="password" placeholder="Password" style="padding:10px;border-radius:10px;border:1px solid #d7dbe7" />
+        <button id="signInBtn">Sign in</button>
+      </div>
+      <div id="msg"></div>
+    </div>
+
+    <div id="dash" style="display:none">
+      <div class="grid">
+        <div class="card">
+          <p class="muted">Total orders</p>
+          <p class="kpi" id="total">—</p>
+        </div>
+        <div class="card">
+          <p class="muted">Last 24 hours</p>
+          <p class="kpi" id="last24">—</p>
+        </div>
+        <div class="card">
+          <p class="muted">Current workload (New+Preparing)</p>
+          <p class="kpi" id="workload">—</p>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h2 style="margin-top:0">By status</h2>
+        <div class="row">
+          <span class="pill">New: <strong id="sNew">—</strong></span>
+          <span class="pill">Preparing: <strong id="sPrep">—</strong></span>
+          <span class="pill">Ready: <strong id="sReady">—</strong></span>
+          <span class="pill">Collected: <strong id="sColl">—</strong></span>
+        </div>
+        <p class="muted" style="margin-top:10px">
+          This updates instantly when staff change statuses in staff.html.
+        </p>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getFirestore, collection, query, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+    // TODO: paste your Firebase config here
+    const firebaseConfig = {
+      // apiKey: "...",
+      // authDomain: "...",
+      // projectId: "...",
+      // ...
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+
+    const $ = (id) => document.getElementById(id);
+
+    function showMsg(text) {
+      const el = $("msg");
+      if (!text) { el.style.display="none"; el.textContent=""; return; }
+      el.style.display="block";
+      el.textContent = text;
+    }
+
+    $("signInBtn").addEventListener("click", async () => {
+      showMsg("");
+      try {
+        await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value);
+      } catch (e) {
+        console.error(e);
+        showMsg("Sign-in failed. Check email/password.");
+      }
+    });
+
+    $("signOutBtn").addEventListener("click", async () => signOut(auth));
+
+    let unsubscribe = null;
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        $("authState").textContent = "Not signed in";
+        $("signOutBtn").style.display = "none";
+        $("loginBox").style.display = "block";
+        $("dash").style.display = "none";
+        if (unsubscribe) unsubscribe();
+        unsubscribe = null;
+        return;
+      }
+
+      $("authState").textContent = "Signed in: " + user.email;
+      $("signOutBtn").style.display = "inline-block";
+      $("loginBox").style.display = "none";
+      $("dash").style.display = "block";
+
+      const q = query(collection(db, "orders"));
+
+      unsubscribe = onSnapshot(q, (snap) => {
+        const now = Date.now();
+        const dayAgo = now - 24*60*60*1000;
+
+        let total = 0, last24 = 0;
+        const by = { New:0, Preparing:0, Ready:0, Collected:0 };
+
+        snap.forEach(doc => {
+          total++;
+          const d = doc.data();
+          const created = d.createdAt?.toDate?.() ? d.createdAt.toDate().getTime() : 0;
+          if (created >= dayAgo) last24++;
+          if (by[d.status] != null) by[d.status]++;
+        });
+
+        $("total").textContent = total;
+        $("last24").textContent = last24;
+
+        $("sNew").textContent = by.New;
+        $("sPrep").textContent = by.Preparing;
+        $("sReady").textContent = by.Ready;
+        $("sColl").textContent = by.Collected;
+
+        $("workload").textContent = by.New + by.Preparing;
+      }, (err) => {
+        console.error(err);
+        showMsg("Insights failed to load. Check rules: read requires staff login.");
+      });
+    });
+  </script>
+</body>
+</html>
