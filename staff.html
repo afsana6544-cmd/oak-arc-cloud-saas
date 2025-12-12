@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Oak & Arc — Staff Order Board</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;background:#f6f7fb}
+    header{padding:20px;background:#111;color:#fff;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+    main{max-width:1100px;margin:24px auto;padding:16px}
+    .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,.06)}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    input,textarea,select{padding:10px;border-radius:10px;border:1px solid #d7dbe7}
+    button{padding:10px 14px;border:0;border-radius:10px;background:#111;color:#fff;cursor:pointer}
+    .muted{color:#5a6072}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th,td{padding:10px;border-bottom:1px solid #eef1f6;vertical-align:top}
+    th{text-align:left;font-size:13px;color:#5a6072}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef1f6;font-size:12px}
+    .msg{margin-top:10px;padding:10px;border-radius:10px}
+    .err{background:#ffecec;border:1px solid #ff9a9a}
+    .ok{background:#e7fbef;border:1px solid #8be2ad}
+    .loginBox{display:none}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1 style="margin:0">Staff Order Board</h1>
+      <p style="margin:6px 0 0;opacity:.85">Protected Module (real-time)</p>
+    </div>
+    <div class="row" style="align-items:center">
+      <span id="authState" class="pill">Not signed in</span>
+      <button id="signOutBtn" style="display:none">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="loginBox" class="card loginBox">
+      <h2 style="margin-top:0">Staff sign-in</h2>
+      <p class="muted">Use the staff account you created in Firebase Authentication.</p>
+      <div class="row">
+        <input id="email" type="email" placeholder="Email" />
+        <input id="password" type="password" placeholder="Password" />
+        <button id="signInBtn">Sign in</button>
+      </div>
+      <div id="loginMsg"></div>
+    </div>
+
+    <div id="appBox" class="card" style="display:none">
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <div>
+          <h2 style="margin:0">Live orders</h2>
+          <p class="muted" style="margin:6px 0 0">Updates appear without refreshing.</p>
+        </div>
+        <div>
+          <label class="muted" style="font-size:12px">Filter status</label><br/>
+          <select id="filter">
+            <option value="ALL">All</option>
+            <option>New</option>
+            <option>Preparing</option>
+            <option>Ready</option>
+            <option>Collected</option>
+          </select>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Customer</th>
+            <th>Order</th>
+            <th>Status / Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+
+      <div id="appMsg"></div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getFirestore, collection, query, orderBy, onSnapshot, doc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+    // TODO: paste your Firebase config here
+    const firebaseConfig = {
+      // apiKey: "...",
+      // authDomain: "...",
+      // projectId: "...",
+      // ...
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+
+    const $ = (id) => document.getElementById(id);
+    const fmt = (d) => d ? new Date(d).toLocaleString() : "—";
+
+    const setMsg = (id, text, type) => {
+      const el = $(id);
+      if (!text) { el.className = ""; el.textContent = ""; return; }
+      el.className = "msg " + (type === "ok" ? "ok" : "err");
+      el.textContent = text;
+    };
+
+    $("signInBtn").addEventListener("click", async () => {
+      setMsg("loginMsg", "", "ok");
+      const email = $("email").value.trim();
+      const password = $("password").value;
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+      } catch (e) {
+        console.error(e);
+        setMsg("loginMsg", "Sign-in failed. Check email/password.", "err");
+      }
+    });
+
+    $("signOutBtn").addEventListener("click", async () => {
+      await signOut(auth);
+    });
+
+    let unsubscribe = null;
+
+    function renderRows(docs) {
+      const filter = $("filter").value;
+      const tbody = $("rows");
+      tbody.innerHTML = "";
+
+      const filtered = docs.filter(d => filter === "ALL" ? true : d.status === filter);
+
+      for (const d of filtered) {
+        const tr = document.createElement("tr");
+
+        tr.innerHTML = `
+          <td>${fmt(d.createdAt)}</td>
+          <td>
+            <div><strong>${escapeHtml(d.customerName)}</strong></div>
+            <div class="muted">${escapeHtml(d.customerEmail)}</div>
+          </td>
+          <td>
+            <div>${escapeHtml(d.items)}</div>
+            <div class="muted">Estimate: ${d.estimate == null ? "—" : "€" + Number(d.estimate).toFixed(2)}</div>
+            <div class="muted">Notes: ${d.internalNotes ? escapeHtml(d.internalNotes) : "—"}</div>
+          </td>
+          <td>
+            <div class="row" style="align-items:center">
+              <select data-id="${d.id}" class="statusSel">
+                ${["New","Preparing","Ready","Collected"].map(s => `<option ${s===d.status?"selected":""}>${s}</option>`).join("")}
+              </select>
+              <button data-id="${d.id}" class="saveBtn">Save</button>
+            </div>
+            <div style="margin-top:8px">
+              <input data-id="${d.id}" class="noteInput" placeholder="Add internal note…" style="width:100%" />
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      // Wire up actions
+      tbody.querySelectorAll(".saveBtn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          setMsg("appMsg","", "ok");
+          const id = btn.dataset.id;
+          const status = tbody.querySelector(`.statusSel[data-id="${id}"]`).value;
+          const noteEl = tbody.querySelector(`.noteInput[data-id="${id}"]`);
+          const note = (noteEl.value || "").trim();
+
+          try {
+            await updateDoc(doc(db, "orders", id), {
+              status,
+              internalNotes: note ? note : undefined,
+              updatedAt: serverTimestamp()
+            });
+            setMsg("appMsg", "Saved. Insights page will update instantly.", "ok");
+            noteEl.value = "";
+          } catch (e) {
+            console.error(e);
+            setMsg("appMsg", "Update failed. Check Firestore rules (staff must be logged in).", "err");
+          }
+        });
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str || "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    $("filter").addEventListener("change", () => {
+      // re-render from cached snapshot if available
+      if (window.__lastDocs) renderRows(window.__lastDocs);
+    });
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        $("authState").textContent = "Not signed in";
+        $("signOutBtn").style.display = "none";
+        $("loginBox").style.display = "block";
+        $("appBox").style.display = "none";
+        if (unsubscribe) unsubscribe();
+        unsubscribe = null;
+        return;
+      }
+
+      $("authState").textContent = "Signed in: " + user.email;
+      $("signOutBtn").style.display = "inline-block";
+      $("loginBox").style.display = "none";
+      $("appBox").style.display = "block";
+
+      // Real-time listener (no refresh)
+      const q = query(collection(db, "orders"), orderBy("createdAt", "desc"));
+      unsubscribe = onSnapshot(q, (snap) => {
+        const docs = snap.docs.map(x => {
+          const data = x.data();
+          return {
+            id: x.id,
+            ...data,
+            createdAt: data.createdAt?.toDate?.() ? data.createdAt.toDate() : null
+          };
+        });
+        window.__lastDocs = docs;
+        renderRows(docs);
+      }, (err) => {
+        console.error(err);
+        setMsg("appMsg", "Live load failed. Are you logged in + are rules correct?", "err");
+      });
+    });
+  </script>
+</body>
+</html>
